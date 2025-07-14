@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Prediction</title>
+    <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+    <h1>Image Prediction</h1>
+
+    <div id="formSection">
+        <form id="uploadForm" enctype="multipart/form-data">
+            <div id="buttonContainer">
+                <input type="file" id="fileInput" accept="image/*">
+                <button type="submit" id="uploadButton">Upload and Predict</button>
+                <button id="openCamera">Open Camera</button>
+                <button id="capturePhoto" style="display: none;">Capture Photo</button>
+            </div>
+        </form>
+    </div>
+
+    <div id="camera" style="display: none;">
+        <video id="video" width="320" height="240" autoplay></video>
+        <canvas id="canvas" width="320" height="240"></canvas>
+    </div>
+    <img id="uploadedImage" alt="Captured Image" style="display: none;">
+
+    <div id="results" style="display: none;">
+        <h2>Prediction Results:</h2>
+        <table id="emotionTable" style="display: none;">
+            <thead>
+                <tr>
+                    <th>Emotion</th>
+                    <th>Probability</th>
+                </tr>
+            </thead>
+            <tbody id="emotionTableBody"></tbody>
+        </table>
+        <p><strong>Age:</strong> <span id="age">undefined</span></p>
+        <p><strong>Gender:</strong> <span id="gender">undefined</span></p>
+        <p><strong>Ethnicity:</strong> <span id="ethnicity">undefined</span></p>
+        <button id="clearButton">Clear</button>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const uploadForm = document.getElementById('uploadForm');
+            const fileInput = document.getElementById('fileInput');
+            const openCameraBtn = document.getElementById('openCamera');
+            const capturePhotoBtn = document.getElementById('capturePhoto');
+            const cameraDiv = document.getElementById('camera');
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            const canvasContext = canvas.getContext('2d');
+            const uploadedImage = document.getElementById('uploadedImage');
+            const resultsDiv = document.getElementById('results');
+            const emotionTable = document.getElementById('emotionTable');
+            const emotionTableBody = document.getElementById('emotionTableBody');
+
+            // Handle file upload
+            uploadForm.addEventListener('submit', function (event) {
+                event.preventDefault();
+
+                if (fileInput.files.length === 0) {
+                    alert('Please select a file.');
+                    return;
+                }
+
+                const file = fileInput.files[0];
+                const reader = new FileReader();
+                reader.onloadend = function () {
+                    const base64Image = reader.result.split(',')[1];
+                    uploadImage(base64Image, reader.result);
+                }
+                reader.readAsDataURL(file);
+            });
+
+            // Handle camera open
+            openCameraBtn.addEventListener('click', function () {
+                cameraDiv.style.display = 'block';
+                capturePhotoBtn.style.display = 'block';
+                openCameraBtn.style.display = 'none';
+
+                navigator.mediaDevices.getUserMedia({ video: true })
+                    .then(stream => {
+                        video.srcObject = stream;
+                        video.play();
+                    })
+                    .catch(err => {
+                        console.error('Error accessing camera: ', err);
+                    });
+            });
+
+            // Handle photo capture
+            capturePhotoBtn.addEventListener('click', function () {
+                canvasContext.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imageData = canvas.toDataURL('image/jpeg').split(',')[1];
+                uploadImage(imageData, canvas.toDataURL('image/jpeg'));
+
+                // Stop video stream and hide camera elements
+                const stream = video.srcObject;
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                video.srcObject = null;
+                cameraDiv.style.display = 'none';
+                capturePhotoBtn.style.display = 'none';
+                openCameraBtn.style.display = 'block';
+            });
+
+            // Upload image to the server
+            function uploadImage(imageData, displayImageData) {
+                fetch('/predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ image: `data:image/jpeg;base64,${imageData}` }) // Corrected image data format
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        displayEmotionTable(data.emotion);
+                        document.getElementById('age').innerText = data.age || 'No data';
+                        document.getElementById('gender').innerText = data.gender || 'No data';
+                        document.getElementById('ethnicity').innerText = data.ethnicity || 'No data';
+                        resultsDiv.style.display = 'block';
+                    })
+                    .catch(error => console.error('Error:', error));
+
+                // Display the uploaded or captured image
+                uploadedImage.src = displayImageData;
+                uploadedImage.style.display = 'block';
+            }
+
+            // Display emotion predictions in a table
+            function displayEmotionTable(emotionData) {
+                console.log('Received Emotion Data:', emotionData); // Debug log to check the received data
+                emotionTableBody.innerHTML = ''; // Clear existing table rows
+                emotionTable.style.display = 'table'; // Show the table
+
+                // Define expected emotions with default values of 0%
+                const expectedEmotions = {
+                    Anger: 0,
+                    Disgust: 0,
+                    Fear: 0,
+                    Happy: 0,
+                    Neutral: 0,
+                    Sad: 0,
+                    Surprise: 0
+                };
+
+                // Strip the extra text before the actual emotion data
+                const cleanedEmotionData = emotionData.replace('Emotion prediction: ', '');
+                console.log('Cleaned Emotion Data:', cleanedEmotionData); // Debug log to check the cleaned data
+
+                // Split emotion data and update the expected emotions object
+                const emotions = cleanedEmotionData.split(', ');
+                emotions.forEach(emotion => {
+                    const [name, value] = emotion.split(' ');
+                    console.log(`Parsed emotion: ${name}, value: ${value}`);
+                    if (name in expectedEmotions) {
+                        const parsedValue = parseFloat(value); // Parse the probability value
+                        if (!isNaN(parsedValue)) {
+                            expectedEmotions[name] = parsedValue; // Update the emotion probability
+                        }
+                    }
+                 });
+
+                // Populate the table with the emotions in the expected order
+                for (const [emotion, value] of Object.entries(expectedEmotions)) {
+                    const row = document.createElement('tr');
+                    const emotionCell = document.createElement('td');
+                    const probabilityCell = document.createElement('td');
+                    emotionCell.textContent = emotion;
+                    probabilityCell.textContent = `${(value * 100).toFixed(0)}%`; // Correctly multiply by 100 to get the percentage
+                    row.appendChild(emotionCell);
+                    row.appendChild(probabilityCell);
+                    emotionTableBody.appendChild(row);
+                }
+            }
+
+            
+
+            // Handle clear button click
+            document.getElementById('clearButton').addEventListener('click', function () {
+                document.getElementById('age').innerText = 'undefined';
+                document.getElementById('gender').innerText = 'undefined';
+                document.getElementById('ethnicity').innerText = 'undefined';
+                uploadedImage.src = '';
+                uploadedImage.style.display = 'none';
+                resultsDiv.style.display = 'none';
+                emotionTable.style.display = 'none';
+                fileInput.value = ''; // Clear the file input
+            });
+        });
+    </script>
+</body>
+</html>
